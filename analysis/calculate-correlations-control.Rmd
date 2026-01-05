@@ -1,0 +1,120 @@
+---
+title: "calculate-correlations-control"
+author: "urwahnawaz"
+date: "2025-12-11"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+## Introduction
+
+```{r}
+library(ggplot2)
+library(magrittr)
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(ggvenn)
+library(VennDiagram)
+library(ggtext)
+library(colorspace)
+library(ragg)
+library(msigdbr)
+library(matrixStats)
+library(readxl)
+library(magrittr)
+#library(recount3)
+```
+
+
+# Wang et al 
+
+
+
+### Load data 
+
+```{r}
+data_gn = recount3::create_rse_manual(
+    project = "ERP006650",
+    project_home = "data_sources/sra",
+    organism = "human",
+    annotation = "gencode_v26",
+    type = "gene"
+)
+```
+
+```{r}
+assay(data_gn, "counts") <- transform_counts(data_gn)
+
+
+data.tpm = recount::getTPM(data_gn)
+
+filter <- rowSums(data.tpm, na.rm = TRUE) > 0.05
+data.filter.tpm = data.tpm[filter,]
+
+```
+
+
+```{r}
+pg <- read.delim("/home/jovyan/work/Data/OnCorr/Controls/txt/proteinGroups.txt",
+                 stringsAsFactors = FALSE,
+                 check.names = FALSE)  # keeps spaces in column names
+
+
+pg_clean <- pg %>%
+  filter(
+    is.na(`Reverse`) | `Reverse` != "+",
+    is.na(`Potential contaminant`) | `Potential contaminant` != "+",
+    is.na(`Only identified by site`) | `Only identified by site` != "+"
+  )
+
+# 3. Find all Intensity columns (protein-level intensities)
+intensity_cols <- grep("^Intensity ", colnames(pg_clean), value = TRUE)
+
+# 4. Keep useful ID columns (only those that actually exist in your file)
+id_cols <- c("Protein IDs",
+             "Majority protein IDs",
+             "Gene names",
+             "Fasta headers")
+id_cols <- intersect(id_cols, colnames(pg_clean))
+
+# 5. Build a clean protein-level intensity table
+protein_intensity_df <- pg_clean %>%
+  select(all_of(id_cols), all_of(intensity_cols))
+
+# 6. (Optional) make a pure numeric matrix + log2-transform
+mat <- as.matrix(protein_intensity_df[, intensity_cols])
+
+# Convert 0 to NA (undetected) before log-transform
+mat[mat == 0] <- NA
+mat_log2 <- log2(mat)
+
+# If you want rownames to be something nice like gene names:
+if ("Gene names" %in% colnames(protein_intensity_df)) {
+  rownames(mat_log2) <- protein_intensity_df$`Gene names`
+} else {
+  rownames(mat_log2) <- protein_intensity_df$`Protein IDs`
+}
+
+```
+
+```{r}
+wang = read_excel("data/Table_EV6.xlsx", sheet = 2, skip=1)
+
+median(wang$`Spearman correlation`)
+
+control = wang %>% 
+  ggplot(aes(x=`Spearman correlation`)) +
+  geom_histogram(color="white", alpha=1, fill = "#ccd5ae") + theme_bw() +
+  labs(x="mRNA-protein correlation", 
+       y = "Number of associations") +  annotate("text", x = -0.3, y = 700,
+  label = "paste(italic(median), \" = 0.35\")", parse = TRUE, color = "#9a031e") + 
+  geom_vline(xintercept = 0.35, linetype = "dashed", color = "#9a031e") +
+  ggtitle("Wang et al (2019)") +
+     theme(legend.position = "none",
+      axis.text=element_text(size=15,  family="serif", color = "black"),
+      axis.title = element_text(size=16, family = "serif", color = "black"))
+
+ggsave(plot = control, filename = "output/Figures/Controls_dist.png", height =4, width =4, dpi = 1200)
+```
